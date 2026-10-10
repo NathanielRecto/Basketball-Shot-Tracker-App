@@ -1,7 +1,9 @@
 version: 1
 bundleID: com.nathanielrecto.ShotTracker
 infoPath: Info.plist
-# Local only (gitignored): run scripts/sync_model.sh after exporting with Python_Raw/scripts/export_coreml.py.
+# Local only (gitignored): run scripts/sync_model.sh after exporting with Python_Raw/scripts/export_coreml.py
+# (and export_parity_frames.py for the optional parity check, which lands in Resources/Parity).
 resources:
   - Resources/DetectorV2.mlpackage
   - Resources/DetectorV2.json
+  - Resources/Parity

@@ -34,12 +34,16 @@ public struct YOLODecoder: Sendable {
     /// `output` is the head without its batch axis, channel-major: [4 + classes][anchors], channels
     /// cx, cy, w, h (model-input pixels) then one score per class. Returns boxes in model-input pixels,
     /// highest score first.
-    public func decode<C: RandomAccessCollection>(_ output: C, anchors: Int) -> [Detection]
-    where C.Element == Float, C.Index == Int {
+    public func decode(_ output: [Float], anchors: Int) -> [Detection] {
+        output.withUnsafeBufferPointer { decode($0, anchors: anchors) }
+    }
+
+    /// Non-generic on purpose: a generic decode called from the app module is not specialised across the module
+    /// boundary, so it would read each of the ~75k values through protocol witnesses.
+    public func decode(_ output: UnsafeBufferPointer<Float>, anchors: Int) -> [Detection] {
         let nc = classes.count
         precondition(output.count == (4 + nc) * anchors, "output has \(output.count) values, expected \((4 + nc) * anchors)")
-        let base = output.startIndex
-        func at(_ channel: Int, _ anchor: Int) -> Float { output[base + channel * anchors + anchor] }
+        func at(_ channel: Int, _ anchor: Int) -> Float { output[channel * anchors + anchor] }
         // PyTorch compares the float32 scores with conf in float32: a score of Float(0.15) is NOT > 0.15.
         let threshold = Float(conf)
 

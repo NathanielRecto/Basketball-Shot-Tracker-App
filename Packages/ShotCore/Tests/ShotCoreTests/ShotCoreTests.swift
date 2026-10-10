@@ -85,6 +85,54 @@ private func head(_ rows: [(Float, Float, Float, Float, [Float])]) -> [Float] {
     }
 }
 
+@Suite struct ParityTests {
+    func det(_ label: String, _ conf: Double, _ x: Double, _ y: Double, _ s: Double = 20) -> Detection {
+        Detection(classIndex: 0, label: label, conf: conf, box: Box(x, y, x + s, y + s))
+    }
+
+    @Test func matchesSameLabelByBestIoU() {
+        let ref = [det("ball", 0.8, 100, 100), det("rim_only", 0.6, 300, 50, 60)]
+        let got = [det("rim_only", 0.62, 301, 50, 60), det("ball", 0.79, 102, 100), det("ball", 0.2, 500, 500)]
+        let c = FrameComparison.compare(reference: ref, candidate: got)
+        #expect(c.matched.count == 2 && c.missed.isEmpty && c.extra.count == 1)
+        let ball = c.matched.first { $0.reference.label == "ball" }!
+        #expect(abs(ball.iou - 360.0 / 440.0) < 1e-9)
+        #expect(ball.maxCornerPx == 2 && abs(ball.confDelta + 0.01) < 1e-9)
+    }
+
+    @Test func differentLabelsOrFarBoxesDoNotMatch() {
+        let c = FrameComparison.compare(reference: [det("ball", 0.5, 0, 0)],
+                                        candidate: [det("hoop", 0.5, 0, 0), det("ball", 0.5, 15, 15)])
+        #expect(c.matched.isEmpty && c.missed.count == 1 && c.extra.count == 2)
+    }
+
+    @Test func summaryAddsUp() {
+        var s = ParitySummary()
+        s.add(FrameComparison.compare(reference: [det("ball", 0.5, 0, 0)], candidate: [det("ball", 0.6, 0, 0)]))
+        s.add(FrameComparison.compare(reference: [det("ball", 0.5, 0, 0)], candidate: []))
+        #expect(s.frames == 2 && s.reference == 2 && s.candidate == 1 && s.matched == 1 && s.missed.count == 1)
+        #expect(s.meanIoU == 1 && abs(s.maxAbsConf - 0.1) < 1e-9)
+    }
+}
+
+@Suite struct ResizeTests {
+    @Test func halvesWithOpenCVRounding() {
+        // 4x2 source -> 2x1 output, 4 bytes per pixel.
+        let src: [UInt8] = [
+            0, 1, 2, 255,   1, 1, 2, 255,   10, 20, 30, 40,   10, 20, 30, 40,
+            0, 2, 2, 255,   1, 2, 3, 255,   11, 21, 31, 41,   13, 23, 33, 43,
+        ]
+        var dst = [UInt8](repeating: 0, count: 8)
+        src.withUnsafeBufferPointer { s in
+            dst.withUnsafeMutableBufferPointer { d in
+                halveRows(src: s.baseAddress!, srcRowBytes: 16, dst: d.baseAddress!, dstRowBytes: 8, width: 2, rows: 0..<1)
+            }
+        }
+        // (0+1+0+1+2)>>2 = 1, (1+1+2+2+2)>>2 = 2, (2+2+2+3+2)>>2 = 2, 255; (44+2)>>2 = 11, (84+2)>>2 = 21, ...
+        #expect(dst == [1, 2, 2, 255, 11, 21, 31, 41])
+    }
+}
+
 @Suite struct ModelInfoTests {
     @Test func readsTheExportJSON() throws {
         let json = """
