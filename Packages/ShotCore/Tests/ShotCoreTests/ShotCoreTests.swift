@@ -133,6 +133,33 @@ private func head(_ rows: [(Float, Float, Float, Float, [Float])]) -> [Float] {
     }
 }
 
+@Suite struct HoopFinderTests {
+    @Test func rimPlusNet() {
+        // 40 px rim: y1 up 0.05 widths, x2 out 0.02 widths, net down to 1.27 widths below the rim's top.
+        #expect(rimToHoop(Box(100, 100, 140, 110)) == Box(100, 98, 140.8, 150.8))
+    }
+
+    @Test func biggestRimPerFrameThenMedian() {
+        let near = Box(100, 100, 140, 110), far = Box(600, 300, 610, 303)
+        let frames: [[Box]] = [
+            [far, near],
+            [Box(102, 100, 142, 110), far],
+            [],  // a player in front of the hoop
+            [Box(98, 100, 138, 110)],
+            [Box(300, 500, 400, 520)],  // one odd frame: the median ignores it
+            [near],
+        ]
+        let r = hoopFromRims(frames)
+        #expect(r.hoop == rimToHoop(near))
+        #expect(abs(r.ambiguity! - (10.0 * 3.0) / (40.0 * 10.0)) < 1e-12)  // the far rim is much smaller
+    }
+
+    @Test func needsAFewFrames() {
+        #expect(hoopFromRims([[Box(0, 0, 10, 10)], [], [Box(0, 0, 10, 10)]]).hoop == nil)
+        #expect(hoopFromRims([[Box(0, 0, 10, 10)]]).ambiguity == nil)
+    }
+}
+
 @Suite struct ModelInfoTests {
     @Test func readsTheExportJSON() throws {
         let json = """

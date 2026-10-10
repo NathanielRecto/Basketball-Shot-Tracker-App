@@ -1,0 +1,47 @@
+{
+  "python_commit": "c2ded2101d3efad1a70298f195432209aed8c56e",
+  "created": "2026-10-10",
+  "params": {
+    "file": "params.json",
+    "bytes": 1115,
+    "sha256": "99c34b733a486682c90753187dc18152201fb290d38e77eb3706b310eb3c8088"
+  },
+  "cases": [
+    {
+      "file": "golden/sim_all_shot_types.json",
+      "bytes": 153091,
+      "sha256": "620ce0afff2adf0deb8834aa530b4cb6ff0fc77cc70f942b599fbf1514a60e8c",
+      "name": "sim_all_shot_types",
+      "source": "synthetic: scripts' simulator, seed 7, 30 fps",
+      "frames": 884,
+      "shots": 7
+    },
+    {
+      "file": "golden/own_session_01.json",
+      "bytes": 1650618,
+      "sha256": "0bbc7e046706e32c089958f32a720ff5d348b29eb4cf749bd4a009f2d89f4e3d",
+      "name": "own_session_01",
+      "source": "session_01.mov, 0-195.7 s, detector settings {'imgsz': 960, 'stride': 1, 'weights': 'runs/detect/combined_v1/weights/best.pt'}",
+      "frames": 11729,
+      "shots": 44
+    },
+    {
+      "file": "golden/own_session_02.json",
+      "bytes": 1618219,
+      "sha256": "f8624bd4852080db0d7dbd29fe826d8f34745fa0b88774e488f84b1771c9495e",
+      "name": "own_session_02",
+      "source": "session_02.mov, 0-251.2 s, detector settings {'imgsz': 960, 'stride': 1, 'weights': 'runs/detect/combined_v1/weights/best.pt'}",
+      "frames": 15059,
+      "shots": 42
+    },
+    {
+      "file": "golden/own_session_05_stride3.json",
+      "bytes": 689029,
+      "sha256": "11c806a9945f55ab3822b4911f30b06568b8612bc7433020cfa003a697bf9908",
+      "name": "own_session_05_stride3",
+      "source": "session_05.mov, 0-285.8 s, detector settings {'imgsz': 960, 'stride': 3, 'weights': 'runs/detect/combined_v1/weights/best.pt'}",
+      "frames": 5714,
+      "shots": 30
+    }
+  ]
+}

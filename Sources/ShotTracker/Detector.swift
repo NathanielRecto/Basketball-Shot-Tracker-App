@@ -36,11 +36,13 @@ final class Detector: @unchecked Sendable {
     struct Prepared: @unchecked Sendable {
         let input: CVPixelBuffer
         let letterbox: Letterbox
+        let t: Double  // the frame's own time (camera presentation time, s)
         let arrived: CFTimeInterval
         let prepareMs: Double
     }
 
     struct Output {
+        let t: Double
         let detections: [Detection]  // frame pixels, highest confidence first
         let frameSize: CGSize
         let prepareMs: Double
@@ -104,12 +106,12 @@ final class Detector: @unchecked Sendable {
     }
 
     /// Both stages back to back.
-    func detect(_ frame: CVPixelBuffer) throws -> Output {
-        try infer(prepare(frame))
+    func detect(_ frame: CVPixelBuffer, t: Double = 0) throws -> Output {
+        try infer(prepare(frame, t: t))
     }
 
     /// Stage 1: the frame letterboxed into a model-sized buffer of our own (the camera's buffer is free afterwards).
-    func prepare(_ frame: CVPixelBuffer, arrived: CFTimeInterval = CACurrentMediaTime()) throws -> Prepared {
+    func prepare(_ frame: CVPixelBuffer, t: Double, arrived: CFTimeInterval = CACurrentMediaTime()) throws -> Prepared {
         let t0 = CACurrentMediaTime()
         let w = CVPixelBufferGetWidth(frame), h = CVPixelBufferGetHeight(frame)
         if letterbox?.srcWidth != w || letterbox?.srcHeight != h {
@@ -117,7 +119,7 @@ final class Detector: @unchecked Sendable {
         }
         let lb = letterbox!
         let input = try letterboxed(frame, lb)
-        return Prepared(input: input, letterbox: lb, arrived: arrived, prepareMs: (CACurrentMediaTime() - t0) * 1000)
+        return Prepared(input: input, letterbox: lb, t: t, arrived: arrived, prepareMs: (CACurrentMediaTime() - t0) * 1000)
     }
 
     /// Stage 2: Core ML prediction, then decode + NMS, boxes mapped back to frame pixels.
@@ -137,7 +139,7 @@ final class Detector: @unchecked Sendable {
             return d
         }
         let t3 = CACurrentMediaTime()
-        return Output(detections: found, frameSize: CGSize(width: lb.srcWidth, height: lb.srcHeight),
+        return Output(t: p.t, detections: found, frameSize: CGSize(width: lb.srcWidth, height: lb.srcHeight),
                       prepareMs: p.prepareMs, predictMs: (t2 - t1) * 1000, decodeMs: (t3 - t2) * 1000,
                       latencyMs: (t3 - p.arrived) * 1000)
     }

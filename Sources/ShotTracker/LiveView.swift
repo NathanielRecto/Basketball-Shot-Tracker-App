@@ -40,19 +40,6 @@ private final class InFlight: @unchecked Sendable {
     func release() { lock.withLock { count -= 1 } }
 }
 
-/// A Bool shared with the camera queue.
-private final class Flag: @unchecked Sendable {
-    private let lock = NSLock()
-    private var value: Bool
-
-    init(_ value: Bool) { self.value = value }
-
-    var isOn: Bool {
-        get { lock.withLock { value } }
-        set { lock.withLock { value = newValue } }
-    }
-}
-
 @MainActor
 final class LiveModel: ObservableObject {
     @Published var status = "Starting…"
@@ -63,19 +50,24 @@ final class LiveModel: ObservableObject {
     @Published var cameraFPS = 0.0
     @Published var detectorFPS = 0.0
     @Published var timings: Detector.Output?
+    @Published var thermal = ProcessInfo.processInfo.thermalState
     @Published var parityLines: [String]?
     @Published var parityRunning = false
-    @Published var thermal = ProcessInfo.processInfo.thermalState
-    @Published var pipelined = true {
-        didSet { pipelineFlag.isOn = pipelined }
-    }
+    // shots
+    @Published var hoop: Box?
+    @Published var hoopAmbiguity: Double?
+    @Published var hoopSampled = 0
+    @Published var ball: BallObs?
+    @Published var made = 0
+    @Published var attempts = 0
+    @Published var banner: ShotEvent?
 
     let camera = CameraController()
     let hasParityFrames = ParityCheck.directory != nil
     private var detector: Detector?
+    private let session = ShotSession()  // inference queue only
     private let counts = FrameCounts()
     private let inFlight = InFlight(limit: 2)
-    private let pipelineFlag = Flag(true)
     private let inferenceQueue = DispatchQueue(label: "detector.infer", qos: .userInteractive)
     private var timer: Timer?
     private var lastTick = CACurrentMediaTime()
@@ -97,38 +89,24 @@ final class LiveModel: ObservableObject {
             status = "Detector: \(error.localizedDescription)"
         }
 
-        let det = detector, counts = counts, inFlight = inFlight, inferenceQueue = inferenceQueue, pipeline = pipelineFlag
+        let det = detector, counts = counts, inFlight = inFlight, inferenceQueue = inferenceQueue, session = session
         camera.onDrop = { counts.drop() }
-        camera.onFrame = { [weak self] frame in  // camera queue: stage 1
+        camera.onFrame = { [weak self] frame, t in  // camera queue: stage 1
             counts.frame()
             guard let det else { return }
-            if !pipeline.isOn {  // both stages on the camera queue, one frame at a time (for comparison)
-                guard inFlight.tryTake() else {
-                    counts.skip()
-                    return
-                }
-                defer { inFlight.release() }
-                do {
-                    let out = try det.detect(frame)
-                    counts.detect()
-                    DispatchQueue.main.async { self?.show(out) }
-                } catch {
-                    DispatchQueue.main.async { self?.status = "Detect: \(error.localizedDescription)" }
-                }
-                return
-            }
             guard inFlight.tryTake() else {
                 counts.skip()
                 return
             }
             do {
-                let prepared = try det.prepare(frame)
-                inferenceQueue.async {  // stage 2
+                let prepared = try det.prepare(frame, t: t)
+                inferenceQueue.async {  // stage 2, then the shot judge (frames stay in order on this serial queue)
                     defer { inFlight.release() }
                     do {
                         let out = try det.infer(prepared)
+                        let update = session.feed(out)
                         counts.detect()
-                        DispatchQueue.main.async { self?.show(out) }
+                        DispatchQueue.main.async { self?.show(out, update) }
                     } catch {
                         DispatchQueue.main.async { self?.status = "Detect: \(error.localizedDescription)" }
                     }
@@ -146,6 +124,7 @@ final class LiveModel: ObservableObject {
     }
 
     func switchLens(to lens: CameraController.Lens) async {
+        let changed = lens != self.lens
         self.lens = lens
         do {
             try await camera.start(lens: lens)
@@ -153,6 +132,26 @@ final class LiveModel: ObservableObject {
         } catch {
             status = "Camera: \(error.localizedDescription)"
         }
+        if changed { refindHoop() }
+    }
+
+    /// Look for the hoop again (camera moved or lens changed). The count is kept.
+    func refindHoop() {
+        let session = session
+        inferenceQueue.async { session.refindHoop() }
+        hoop = nil
+        hoopAmbiguity = nil
+        hoopSampled = 0
+        ball = nil
+    }
+
+    /// Start counting from zero with the same hoop.
+    func resetShots() {
+        let session = session
+        inferenceQueue.async { session.resetShots() }
+        made = 0
+        attempts = 0
+        banner = nil
     }
 
     /// Phone detector vs PyTorch on the bundled dev frames (camera paused meanwhile).
@@ -183,10 +182,23 @@ final class LiveModel: ObservableObject {
         await switchLens(to: lens)
     }
 
-    private func show(_ out: Detector.Output) {
+    private func show(_ out: Detector.Output, _ update: ShotSession.Update) {
         detections = out.detections
         frameSize = out.frameSize
         timings = out
+        hoop = update.hoop
+        hoopAmbiguity = update.ambiguity
+        hoopSampled = update.sampled
+        ball = update.ball
+        for ev in update.events {
+            attempts += 1
+            if ev.outcome == .made { made += 1 }
+            banner = ev
+            let index = ev.index
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                if self?.banner?.index == index { self?.banner = nil }
+            }
+        }
     }
 
     private func tick() {
@@ -207,7 +219,7 @@ struct LiveView: View {
             Color.black.ignoresSafeArea()
             ZStack {
                 CameraPreview(camera: model.camera)
-                DetectionOverlay(detections: model.detections, frameSize: model.frameSize)
+                DetectionOverlay(detections: model.detections, hoop: model.hoop, ball: model.ball, frameSize: model.frameSize)
             }
             .aspectRatio(model.frameSize.width / model.frameSize.height, contentMode: .fit)
 
@@ -215,20 +227,13 @@ struct LiveView: View {
                 HStack(alignment: .top) {
                     hud
                     Spacer()
+                    score
                 }
                 Spacer()
-                HStack {
+                HStack(alignment: .bottom) {
+                    if let ev = model.banner { banner(ev) }
                     Spacer()
-                    Button(model.pipelined ? "Pipe on" : "Pipe off") { model.pipelined.toggle() }
-                        .buttonStyle(.borderedProminent)
-                        .tint(model.pipelined ? .teal : .gray.opacity(0.6))
-                    if model.hasParityFrames {
-                        Button("Check") { model.runParity() }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.indigo)
-                            .disabled(model.parityRunning)
-                    }
-                    lensButtons
+                    controls
                 }
             }
             .padding()
@@ -250,21 +255,84 @@ struct LiveView: View {
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
     }
 
+    private var hoopStatus: String {
+        guard model.hoop != nil else {
+            return "hoop: finding \(model.hoopSampled)/\(ShotSession.findFrames) (keep the rim in view)"
+        }
+        if let a = model.hoopAmbiguity, a > 0.5 { return "hoop: 2 hoops in view, check the green box" }
+        return "hoop: locked"
+    }
+
     private var hud: some View {
         let byLabel = Dictionary(grouping: model.detections, by: \.label).mapValues(\.count)
         let t = model.timings
         return VStack(alignment: .leading, spacing: 2) {
-            Text("\(model.lens.rawValue) · \(Int(model.frameSize.width))×\(Int(model.frameSize.height)) · camera \(model.cameraFPS, specifier: "%.0f") fps · detector \(model.detectorFPS, specifier: "%.1f") fps")
+            Text("\(model.lens.rawValue) · camera \(model.cameraFPS, specifier: "%.0f") fps · detector \(model.detectorFPS, specifier: "%.1f") fps · thermal \(Self.name(model.thermal))")
             if let t {
                 Text("prep \(t.prepareMs, specifier: "%.1f") · model \(t.predictMs, specifier: "%.1f") · decode \(t.decodeMs, specifier: "%.1f") · latency \(t.latencyMs, specifier: "%.0f") ms")
             }
-            Text("ball \(byLabel["ball"] ?? 0) · hoop \(byLabel["hoop"] ?? 0) · rim \(byLabel["rim_only"] ?? 0) · thermal \(Self.name(model.thermal)) · pipeline \(model.pipelined ? "on" : "off")")
+            Text("ball \(byLabel["ball"] ?? 0) · rim \(byLabel["rim_only"] ?? 0) · \(hoopStatus)")
             if !model.modelName.isEmpty { Text(model.modelName).foregroundStyle(.white.opacity(0.6)) }
         }
         .font(.caption.monospaced())
         .foregroundStyle(.white)
         .padding(8)
         .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private var score: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            Text("\(model.made) / \(model.attempts)").font(.system(size: 34, weight: .bold, design: .rounded))
+            Text(model.attempts == 0 ? "made / shots" : "\(Int((100 * Double(model.made) / Double(model.attempts)).rounded()))%")
+                .font(.caption.monospaced())
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    private func banner(_ ev: ShotEvent) -> some View {
+        let made = ev.outcome == .made
+        return VStack(alignment: .leading, spacing: 0) {
+            Text(made ? "MADE" : "MISSED").font(.system(size: 44, weight: .heavy, design: .rounded))
+            Text(Self.reasonText(ev.reason)).font(.callout)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 8)
+        .background((made ? Color.green : Color.red).opacity(0.85), in: RoundedRectangle(cornerRadius: 14))
+        .transition(.scale.combined(with: .opacity))
+    }
+
+    private var controls: some View {
+        HStack(spacing: 8) {
+            Button("Find hoop") { model.refindHoop() }.buttonStyle(.bordered).tint(.white)
+            Button("Reset") { model.resetShots() }.buttonStyle(.bordered).tint(.white)
+            if model.hasParityFrames {
+                Button("Check") { model.runParity() }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.indigo)
+                    .disabled(model.parityRunning)
+            }
+            ForEach(CameraController.Lens.allCases) { lens in
+                Button(lens.rawValue) { Task { await model.switchLens(to: lens) } }
+                    .buttonStyle(.borderedProminent)
+                    .tint(lens == model.lens ? .orange : .gray.opacity(0.6))
+            }
+        }
+    }
+
+    static func reasonText(_ reason: String) -> String {
+        switch reason {
+        case "through_hoop": "through the hoop"
+        case "rattled_in": "rattled in"
+        case "off_target": "off target"
+        case "rim_out": "in and out"
+        case "rim_bounce": "off the rim"
+        case "fell_past_rim": "fell past the rim"
+        default: reason
+        }
     }
 
     static func name(_ t: ProcessInfo.ThermalState) -> String {
@@ -296,32 +364,35 @@ struct LiveView: View {
         .background(.black.opacity(0.85), in: RoundedRectangle(cornerRadius: 12))
         .padding(30)
     }
-
-    private var lensButtons: some View {
-        HStack(spacing: 8) {
-            ForEach(CameraController.Lens.allCases) { lens in
-                Button(lens.rawValue) { Task { await model.switchLens(to: lens) } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(lens == model.lens ? .orange : .gray.opacity(0.6))
-            }
-        }
-    }
 }
 
-/// Detector boxes drawn over the preview; frame pixels scale linearly onto the view.
+/// Detector boxes, the hoop the shot judge uses and the tracked ball, drawn over the preview; frame pixels scale
+/// linearly onto the view.
 struct DetectionOverlay: View {
     let detections: [Detection]
+    let hoop: Box?
+    let ball: BallObs?
     let frameSize: CGSize
 
     var body: some View {
         Canvas { ctx, size in
             let sx = size.width / frameSize.width, sy = size.height / frameSize.height
+            func rect(_ b: Box) -> CGRect {
+                CGRect(x: b.x1 * sx, y: b.y1 * sy, width: b.width * sx, height: b.height * sy)
+            }
+            if let hoop {
+                ctx.stroke(Path(rect(hoop)), with: .color(.green), style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            }
             for d in detections {
-                let rect = CGRect(x: d.box.x1 * sx, y: d.box.y1 * sy, width: d.box.width * sx, height: d.box.height * sy)
-                let color = Self.color(d.label)
-                ctx.stroke(Path(rect), with: .color(color), lineWidth: 2)
+                let r = rect(d.box), color = Self.color(d.label)
+                ctx.stroke(Path(r), with: .color(color.opacity(0.8)), lineWidth: 1.5)
                 let label = Text("\(d.label) \(d.conf, specifier: "%.2f")").font(.caption2.monospaced()).foregroundStyle(color)
-                ctx.draw(label, at: CGPoint(x: rect.minX, y: rect.minY - 2), anchor: .bottomLeading)
+                ctx.draw(label, at: CGPoint(x: r.minX, y: r.minY - 2), anchor: .bottomLeading)
+            }
+            if let ball {
+                let d = max(ball.diameter, 12)
+                let r = CGRect(x: (ball.x - d / 2) * sx, y: (ball.y - d / 2) * sy, width: d * sx, height: d * sy)
+                ctx.stroke(Path(ellipseIn: r.insetBy(dx: -4, dy: -4)), with: .color(.white), lineWidth: 3)
             }
         }
         .allowsHitTesting(false)
