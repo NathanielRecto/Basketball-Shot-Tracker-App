@@ -1,0 +1,14 @@
+.DS_Store
+/.build
+Packages/*/.build
+xcuserdata/
+DerivedData/
+.swiftpm/configuration/registries.json
+.swiftpm/xcode/package.xcworkspace/contents.xcworkspacedata
+.netrc
+
+/xtool
+
+# The detector is local only, like its .pt weights (scripts/sync_model.sh copies it in).
+/Resources/*
+!/Resources/README.md

@@ -1,0 +1,7 @@
+version: 1
+bundleID: com.nathanielrecto.ShotTracker
+infoPath: Info.plist
+# Local only (gitignored): run scripts/sync_model.sh after exporting with Python_Raw/scripts/export_coreml.py.
+resources:
+  - Resources/DetectorV2.mlpackage
+  - Resources/DetectorV2.json
