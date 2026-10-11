@@ -20,6 +20,7 @@ struct SessionsView: View {
                     List {
                         ForEach(sessions) { s in
                             NavigationLink(value: s) { row(s) }
+                                .listRowBackground(Theme.row)
                         }
                         .onDelete { offsets in
                             for i in offsets { try? SessionStore.delete(sessions[i]) }
@@ -28,6 +29,8 @@ struct SessionsView: View {
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .themed()
             .navigationTitle("Sessions")
             .navigationDestination(for: SessionSummary.self) { s in
                 SessionDetailView(session: s) {
@@ -51,7 +54,7 @@ struct SessionsView: View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
                 Text(s.started.formatted(date: .abbreviated, time: .shortened)).font(.headline)
-                Text("\(SessionStore.clock(s.seconds)) · \(s.lens) lens\(s.hasVideo ? "" : " · no video")")
+                Text("\(SessionStore.clock(s.seconds)) · \(s.lens)\(s.hasVideo ? "" : " · no video")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -94,12 +97,15 @@ struct SessionDetailView: View {
                 stats
                 List(Array(session.shots.enumerated()), id: \.offset) { i, shot in
                     Button { playback.seek(to: shot.tRelease - 1) } label: { shotRow(i, shot) }
+                        .listRowBackground(Theme.row)
                 }
                 .listStyle(.plain)
             }
             .frame(minWidth: 230, maxWidth: 300)
         }
         .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .themed()
         .navigationTitle(session.started.formatted(date: .abbreviated, time: .shortened))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -131,7 +137,7 @@ struct SessionDetailView: View {
                 Text("\(session.made) / \(session.attempts)").font(.system(size: 34, weight: .bold, design: .rounded))
                 Text(session.fgText).font(.title3).foregroundStyle(.secondary)
             }
-            Text("Made \(session.made) · Missed \(session.attempts - session.made) · \(SessionStore.clock(session.seconds)) · \(session.lens) lens")
+            Text("Made \(session.made) · Missed \(session.attempts - session.made) · \(SessionStore.clock(session.seconds)) · \(session.lens)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

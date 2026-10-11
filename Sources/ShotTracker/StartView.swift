@@ -12,10 +12,7 @@ struct StartView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(red: 13 / 255, green: 24 / 255, blue: 43 / 255),
-                                    Color(red: 28 / 255, green: 50 / 255, blue: 82 / 255)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
+            Theme.background
 
             HStack(spacing: 48) {
                 VStack(spacing: 14) {
@@ -35,7 +32,7 @@ struct StartView: View {
 
                 VStack(alignment: .leading, spacing: 18) {
                     tip("camera.on.rectangle", "Phone on a tripod at the sideline, in landscape")
-                    tip("viewfinder", "0.5x or 1x lens, with the rim in view the whole time")
+                    tip("viewfinder", "0.5x or 1x zoom (pinch to adjust), with the rim in view the whole time")
                     tip("basketball.fill", "Shoot as usual: the hoop is found by itself")
                     Button(action: onStart) {
                         Label("Start", systemImage: "play.fill")
@@ -44,7 +41,7 @@ struct StartView: View {
                             .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(Color(red: 242 / 255, green: 140 / 255, blue: 40 / 255))
+                    .tint(Theme.orange)
                     .padding(.top, 6)
                     Button(action: onSessions) {
                         Label("Sessions", systemImage: "film.stack")
@@ -69,7 +66,7 @@ struct StartView: View {
         } icon: {
             Image(systemName: symbol)
                 .font(.title3)
-                .foregroundStyle(Color(red: 242 / 255, green: 140 / 255, blue: 40 / 255))
+                .foregroundStyle(Theme.orange)
                 .frame(width: 30)
         }
     }

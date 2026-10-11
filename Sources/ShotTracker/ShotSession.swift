@@ -34,7 +34,7 @@ final class ShotSession: @unchecked Sendable {
         self.params = params
     }
 
-    /// Forget the hoop and find it again from scratch (the lens changed: everything moves at once).
+    /// Forget the hoop and find it again from scratch (the zoom changed: everything moves at once).
     func refindHoop() {
         rims = []
         pipeline = nil

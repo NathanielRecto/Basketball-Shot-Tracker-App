@@ -5,8 +5,11 @@
 # bundles it); without frames the app hides its Check button.
 #
 #   scripts/sync_model.sh                                  # from ../Python_Raw/exports
+#   scripts/sync_model.sh --no-parity                      # a build for someone else: no dev frames (they show people)
 #   scripts/sync_model.sh path/to/exports DetectorV2
 set -euo pipefail
+no_parity=0
+if [ "${1:-}" = "--no-parity" ]; then no_parity=1; shift; fi
 here="$(cd "$(dirname "$0")/.." && pwd)"
 exports="${1:-$here/../Python_Raw/exports}"
 name="${2:-DetectorV2}"
@@ -24,7 +27,9 @@ echo "copied $name from $coreml"
 grep -E '"(weights_sha256|precision)"' "$here/Resources/$name.json"
 
 mkdir -p "$here/Resources/Parity"
-if [ -f "$parity/reference.json" ]; then
+if [ "$no_parity" = 1 ]; then
+  echo "no parity check in this build (--no-parity): the app's Check button stays hidden"
+elif [ -f "$parity/reference.json" ]; then
   cp -R "$parity/frames" "$parity/reference.json" "$here/Resources/Parity/"
   if [ -e "$coreml/${name}_fp32.mlpackage" ]; then
     cp -R "$coreml/${name}_fp32.mlpackage" "$coreml/${name}_fp32.json" "$here/Resources/Parity/"

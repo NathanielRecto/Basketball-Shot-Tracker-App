@@ -46,7 +46,11 @@ final class LiveModel: ObservableObject {
     @Published var status = "Starting…"
     @Published var detections: [Detection] = []
     @Published var frameSize = CGSize(width: 1920, height: 1080)
-    @Published var lens = CameraController.Lens.ultraWide
+    @Published var zoom = 0.5  // as the Camera app shows it
+    @Published var zoomRange = CameraController.ZoomRange(min: 0.5, max: CameraController.maxDisplayZoom)
+    @Published var cameraName = ""
+    private var zoomAtHoop = 0.5  // the zoom the current hoop was found at
+    private var zoomSettle: Task<Void, Never>?
     @Published var modelName = ""
     @Published var cameraFPS = 0.0
     @Published var detectorFPS = 0.0
@@ -126,7 +130,9 @@ final class LiveModel: ObservableObject {
                 DispatchQueue.main.async { self?.status = "Prepare: \(error.localizedDescription)" }
             }
         }
-        await switchLens(to: lens)
+        await startCamera()
+        zoom = zoomRange.min  // the camera starts at its widest (0.5x where there is an ultra-wide lens)
+        zoomAtHoop = zoom
         lastTick = CACurrentMediaTime()
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
@@ -141,7 +147,7 @@ final class LiveModel: ObservableObject {
         }
         guard let info = detector?.info else { return }
         do {
-            _ = try recorder.start(lens: lens.rawValue, model: info)
+            _ = try recorder.start(lens: Self.zoomText(zoom), model: info)
             recordingSince = Date()
             recordNote = nil
         } catch {
@@ -177,19 +183,41 @@ final class LiveModel: ObservableObject {
         UIApplication.shared.isIdleTimerDisabled = false
     }
 
-    func switchLens(to lens: CameraController.Lens) async {
-        let changed = lens != self.lens
-        self.lens = lens
+    func startCamera() async {
         do {
-            try await camera.start(lens: lens)
+            zoomRange = try await camera.start()
+            cameraName = camera.cameraName
+            camera.setZoom(zoom)
             if detector != nil { status = "" }
         } catch {
             status = "Camera: \(error.localizedDescription)"
         }
-        if changed { refindHoop() }
     }
 
-    /// Find the hoop from scratch (the lens changed). The count is kept. A phone that merely moves does not need
+    /// Zoom as the Camera app shows it (0.5x = ultra-wide). `settled`: the pinch or button press is over, so once
+    /// the zoom has stayed put briefly, find the hoop again (everything in view moved).
+    func setZoom(_ value: Double, settled: Bool) {
+        let z = min(max(value, zoomRange.min), zoomRange.max)
+        guard abs(z - zoom) > 0.001 || settled else { return }
+        let changed = abs(z - zoom) > 0.001
+        zoom = z
+        if changed { camera.setZoom(z) }
+        zoomSettle?.cancel()
+        guard settled, abs(z - zoomAtHoop) > 0.01 else { return }
+        zoomSettle = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self else { return }
+            self.zoomAtHoop = self.zoom
+            self.refindHoop()
+        }
+    }
+
+    static func zoomText(_ z: Double) -> String {
+        let r = (z * 10).rounded() / 10
+        return r == r.rounded() ? "\(Int(r))x" : String(format: "%.1fx", r)
+    }
+
+    /// Find the hoop from scratch (the zoom changed). The count is kept. A phone that merely moves does not need
     /// this: the session follows the rim between shots.
     private func refindHoop() {
         let session = session
@@ -234,7 +262,7 @@ final class LiveModel: ObservableObject {
     private func finishParity(_ lines: [String]) async {
         parityLines = lines
         parityRunning = false
-        await switchLens(to: lens)
+        await startCamera()
     }
 
     private func show(_ out: Detector.Output, _ update: ShotSession.Update) {
@@ -273,6 +301,7 @@ struct LiveView: View {
     @StateObject private var model = LiveModel()
     /// Boxes, hoop, tracked ball, speed readout and the parity check; off = just the camera, score and calls.
     @AppStorage("showBoxes") private var showBoxes = true
+    @State private var pinchStart: Double?
 
     var body: some View {
         ZStack {
@@ -284,6 +313,19 @@ struct LiveView: View {
                 }
             }
             .aspectRatio(model.frameSize.width / model.frameSize.height, contentMode: .fit)
+            .contentShape(Rectangle())
+            .gesture(
+                MagnifyGesture()
+                    .onChanged { v in
+                        let start = pinchStart ?? model.zoom
+                        pinchStart = start
+                        model.setZoom(start * v.magnification, settled: false)
+                    }
+                    .onEnded { _ in
+                        pinchStart = nil
+                        model.setZoom(model.zoom, settled: true)
+                    }
+            )
 
             VStack {
                 HStack(alignment: .top) {
@@ -356,7 +398,7 @@ struct LiveView: View {
         let byLabel = Dictionary(grouping: model.detections, by: \.label).mapValues(\.count)
         let t = model.timings
         return VStack(alignment: .leading, spacing: 2) {
-            Text("\(model.lens.rawValue) · camera \(model.cameraFPS, specifier: "%.0f") fps · detector \(model.detectorFPS, specifier: "%.1f") fps · thermal \(Self.name(model.thermal))")
+            Text("\(LiveModel.zoomText(model.zoom)) \(model.cameraName) · camera \(model.cameraFPS, specifier: "%.0f") fps · detector \(model.detectorFPS, specifier: "%.1f") fps · thermal \(Self.name(model.thermal))")
             if let t {
                 Text("prep \(t.prepareMs, specifier: "%.1f") · model \(t.predictMs, specifier: "%.1f") · decode \(t.decodeMs, specifier: "%.1f") · latency \(t.latencyMs, specifier: "%.0f") ms")
             }
@@ -422,12 +464,25 @@ struct LiveView: View {
                     .tint(.indigo)
                     .disabled(model.parityRunning)
             }
-            ForEach(CameraController.Lens.allCases) { lens in
-                Button(lens.rawValue) { Task { await model.switchLens(to: lens) } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(lens == model.lens ? .orange : .gray.opacity(0.6))
+            // Zoom presets; pinch the preview for anything in between (the nearest preset shows the actual zoom).
+            ForEach(presets, id: \.self) { z in
+                let on = abs(model.zoom - z) < 0.05
+                Button(on || !nearestPreset(z) ? LiveModel.zoomText(z) : LiveModel.zoomText(model.zoom)) {
+                    model.setZoom(z, settled: true)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(on ? Theme.orange : (nearestPreset(z) ? Theme.orange.opacity(0.55) : .gray.opacity(0.6)))
+                .monospacedDigit()
             }
         }
+    }
+
+    private var presets: [Double] {
+        [0.5, 1, 2].filter { $0 >= model.zoomRange.min - 0.01 && $0 <= model.zoomRange.max + 0.01 }
+    }
+
+    private func nearestPreset(_ z: Double) -> Bool {
+        presets.min { abs($0 - model.zoom) < abs($1 - model.zoom) } == z
     }
 
     static func reasonText(_ reason: String) -> String {
