@@ -28,9 +28,9 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     }
 
     let session = AVCaptureSession()
-    /// Called on the video queue for each frame it keeps up with (pixels, presentation time in seconds);
+    /// Called on the video queue for each frame it keeps up with (the sample: pixels + presentation time);
     /// late frames are dropped (`onDrop`).
-    var onFrame: ((CVPixelBuffer, Double) -> Void)?
+    var onFrame: ((CMSampleBuffer) -> Void)?
     var onDrop: (() -> Void)?
 
     private let sessionQueue = DispatchQueue(label: "camera.session")
@@ -133,8 +133,7 @@ final class CameraController: NSObject, AVCaptureVideoDataOutputSampleBufferDele
     }
 
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard let frame = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        onFrame?(frame, CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds)
+        onFrame?(sampleBuffer)
     }
 
     func captureOutput(_ output: AVCaptureOutput, didDrop sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {

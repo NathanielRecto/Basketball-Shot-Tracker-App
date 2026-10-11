@@ -6,7 +6,12 @@
 	<key>CFBundleDisplayName</key>
 	<string>Shot Tracker</string>
 	<key>NSCameraUsageDescription</key>
-	<string>The camera watches the hoop to call each shot made or missed. Video stays on this phone.</string>
+	<string>The camera watches the hoop to call each shot made or missed. Video stays on this phone; sessions you record are saved here.</string>
+	<!-- Recorded sessions (Documents/Sessions) appear in the Files app and in Apple Devices / Finder file sharing. -->
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<!-- Filmed on a tripod from the sideline, in landscape, like the research footage. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>

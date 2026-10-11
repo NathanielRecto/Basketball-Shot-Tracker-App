@@ -4,7 +4,7 @@ import SwiftUI
 struct ShotTrackerApp: App {
     var body: some Scene {
         WindowGroup {
-            LiveView()
+            RootView()
         }
     }
 }

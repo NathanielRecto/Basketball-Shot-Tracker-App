@@ -1,3 +1,4 @@
+import CoreMedia
 import QuartzCore
 import ShotCore
 import SwiftUI
@@ -62,11 +63,15 @@ final class LiveModel: ObservableObject {
     @Published var made = 0
     @Published var attempts = 0
     @Published var banner: ShotEvent?
+    // recording
+    @Published var recordingSince: Date?
+    @Published var recordNote: String?
 
     let camera = CameraController()
     let hasParityFrames = ParityCheck.directory != nil
     private var detector: Detector?
     private let session = ShotSession()  // inference queue only
+    private let recorder = SessionRecorder()
     private let counts = FrameCounts()
     private let inFlight = InFlight(limit: 2)
     private let inferenceQueue = DispatchQueue(label: "detector.infer", qos: .userInteractive)
@@ -91,10 +96,13 @@ final class LiveModel: ObservableObject {
         }
 
         let det = detector, counts = counts, inFlight = inFlight, inferenceQueue = inferenceQueue, session = session
+        let recorder = recorder
         camera.onDrop = { counts.drop() }
-        camera.onFrame = { [weak self] frame, t in  // camera queue: stage 1
+        camera.onFrame = { [weak self] sample in  // camera queue: stage 1
             counts.frame()
-            guard let det else { return }
+            recorder.append(sample)  // every delivered frame goes into a recording, detected or not
+            guard let det, let frame = CMSampleBufferGetImageBuffer(sample) else { return }
+            let t = CMSampleBufferGetPresentationTimeStamp(sample).seconds
             guard inFlight.tryTake() else {
                 counts.skip()
                 return
@@ -106,6 +114,7 @@ final class LiveModel: ObservableObject {
                     do {
                         let out = try det.infer(prepared)
                         let update = session.feed(out)
+                        recorder.log(out, update)
                         counts.detect()
                         DispatchQueue.main.async { self?.show(out, update) }
                     } catch {
@@ -122,6 +131,50 @@ final class LiveModel: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
+    }
+
+    /// Record / stop recording the session (video + the app's detections and calls).
+    func toggleRecording() {
+        if recordingSince != nil {
+            finishRecording()
+            return
+        }
+        guard let info = detector?.info else { return }
+        do {
+            _ = try recorder.start(lens: lens.rawValue, model: info)
+            recordingSince = Date()
+            recordNote = nil
+        } catch {
+            recordNote = error.localizedDescription
+        }
+    }
+
+    private func finishRecording() {
+        guard recordingSince != nil else { return }
+        recordingSince = nil
+        recorder.stop { [weak self] result in
+            let note: String? = switch result {
+            case .success(let saved)?:
+                "Saved \(saved.folder.lastPathComponent): \(Int(saved.seconds / 60)):\(String(format: "%02d", Int(saved.seconds) % 60)), "
+                    + "\(saved.shots) shots. Watch it under Sessions on the start screen."
+            case .failure(let error)?: error.localizedDescription
+            case nil: nil
+            }
+            Task { @MainActor in
+                self?.recordNote = note
+                try? await Task.sleep(for: .seconds(6))
+                if self?.recordNote == note { self?.recordNote = nil }
+            }
+        }
+    }
+
+    /// Leaving the camera screen: recording saved, camera off, screen may sleep again.
+    func stop() {
+        finishRecording()
+        camera.stop()
+        timer?.invalidate()
+        timer = nil
+        UIApplication.shared.isIdleTimerDisabled = false
     }
 
     func switchLens(to lens: CameraController.Lens) async {
@@ -215,6 +268,8 @@ final class LiveModel: ObservableObject {
 }
 
 struct LiveView: View {
+    /// Back to the start screen.
+    let onClose: () -> Void
     @StateObject private var model = LiveModel()
     /// Boxes, hoop, tracked ball, speed readout and the parity check; off = just the camera, score and calls.
     @AppStorage("showBoxes") private var showBoxes = true
@@ -232,6 +287,14 @@ struct LiveView: View {
 
             VStack {
                 HStack(alignment: .top) {
+                    Button {
+                        model.stop()
+                        onClose()
+                    } label: {
+                        Image(systemName: "xmark").font(.headline)
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.white)
                     if showBoxes {
                         hud
                     } else if model.hoop == nil {
@@ -245,6 +308,16 @@ struct LiveView: View {
                     score
                 }
                 Spacer()
+                if let note = model.recordNote {
+                    HStack {
+                        Spacer()
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.black.opacity(0.7), in: RoundedRectangle(cornerRadius: 8))
+                    }
+                }
                 HStack(alignment: .bottom) {
                     if let ev = model.banner { banner(ev) }
                     Spacer()
@@ -268,6 +341,7 @@ struct LiveView: View {
         .persistentSystemOverlays(.hidden)
         .task { await model.start() }
         .onAppear { UIApplication.shared.isIdleTimerDisabled = true }
+        .onDisappear { model.stop() }
     }
 
     private var hoopStatus: String {
@@ -322,6 +396,20 @@ struct LiveView: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
+            Button { model.toggleRecording() } label: {
+                if let since = model.recordingSince {
+                    TimelineView(.periodic(from: since, by: 1)) { ctx in
+                        let s = max(0, Int(ctx.date.timeIntervalSince(since)))
+                        Label("\(s / 60):\(String(format: "%02d", s % 60))", systemImage: "stop.circle.fill")
+                            .monospacedDigit()
+                    }
+                } else {
+                    Label("Record", systemImage: "record.circle")
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(model.recordingSince != nil ? .red : .gray.opacity(0.6))
+            .disabled(model.modelName.isEmpty)  // detector not ready yet
             Button { showBoxes.toggle() } label: {
                 Label("Boxes", systemImage: showBoxes ? "eye" : "eye.slash")
             }
