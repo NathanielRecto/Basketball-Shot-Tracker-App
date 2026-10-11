@@ -72,6 +72,9 @@ struct SessionDetailView: View {
     let onDelete: () -> Void
     @StateObject private var playback: Playback
     @State private var confirmDelete = false
+    @State private var exporting = false
+    @State private var export: ExportFile?
+    @State private var exportError: String?
     @Environment(\.dismiss) private var dismiss
 
     init(session: SessionSummary, onDelete: @escaping () -> Void) {
@@ -109,12 +112,30 @@ struct SessionDetailView: View {
         .navigationTitle(session.started.formatted(date: .abbreviated, time: .shortened))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem {
+                Button {
+                    exportSession()
+                } label: {
+                    if exporting {
+                        ProgressView()
+                    } else {
+                        Label("Export session", systemImage: "shippingbox")
+                    }
+                }
+                .disabled(exporting)
+            }
             if session.hasVideo {
                 ToolbarItem { ShareLink(item: session.videoURL) }
             }
             ToolbarItem {
                 Button(role: .destructive) { confirmDelete = true } label: { Image(systemName: "trash") }
             }
+        }
+        .sheet(item: $export) { file in ShareSheet(items: [file.url]) }
+        .alert("Could not export the session", isPresented: .constant(exportError != nil)) {
+            Button("OK") { exportError = nil }
+        } message: {
+            Text(exportError ?? "")
         }
         .confirmationDialog("Delete this session and its video?", isPresented: $confirmDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
@@ -124,6 +145,20 @@ struct SessionDetailView: View {
             }
         }
         .onDisappear { playback.player?.pause() }
+    }
+
+    /// Zips the session (video + session.json, for labelling and scoring on a PC) and opens the share sheet.
+    private func exportSession() {
+        exporting = true
+        let s = session
+        Task {
+            let result = await Task.detached { Result { try SessionStore.exportZip(s) } }.value
+            exporting = false
+            switch result {
+            case .success(let url): export = ExportFile(url: url)
+            case .failure(let error): exportError = error.localizedDescription
+            }
+        }
     }
 
     /// The call to show over the video: from the moment the app made it, for 2 s.
@@ -169,6 +204,22 @@ struct SessionDetailView: View {
         .padding(.vertical, 6)
         .background((made ? Color.green : Color.red).opacity(0.85), in: RoundedRectangle(cornerRadius: 10))
     }
+}
+
+struct ExportFile: Identifiable {
+    var url: URL
+    var id: URL { url }
+}
+
+/// The system share sheet (Save to Files, Drive, Mail, AirDrop, ...).
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 /// The system video player (play / pause, scrubbing, full screen). SwiftUI's VideoPlayer lives in a cross-import
