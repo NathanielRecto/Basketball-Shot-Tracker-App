@@ -102,6 +102,9 @@ public final class ShotDetector {
 
     // ---- public API -------------------------------------------------------------------
 
+    /// No shot in progress (not armed, in flight, confirming or rattling): safe to move the hoop.
+    public var isIdle: Bool { state == .idle }
+
     /// Optional hint from pose estimation: the ball was still in the shooter's hand at `t`.
     public func noteBallInHand(_ t: Double) {
         handT = t

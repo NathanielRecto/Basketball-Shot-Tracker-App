@@ -57,6 +57,7 @@ final class LiveModel: ObservableObject {
     @Published var hoop: Box?
     @Published var hoopAmbiguity: Double?
     @Published var hoopSampled = 0
+    @Published var hoopMoves = 0
     @Published var ball: BallObs?
     @Published var made = 0
     @Published var attempts = 0
@@ -135,8 +136,9 @@ final class LiveModel: ObservableObject {
         if changed { refindHoop() }
     }
 
-    /// Look for the hoop again (camera moved or lens changed). The count is kept.
-    func refindHoop() {
+    /// Find the hoop from scratch (the lens changed). The count is kept. A phone that merely moves does not need
+    /// this: the session follows the rim between shots.
+    private func refindHoop() {
         let session = session
         inferenceQueue.async { session.refindHoop() }
         hoop = nil
@@ -189,6 +191,7 @@ final class LiveModel: ObservableObject {
         hoop = update.hoop
         hoopAmbiguity = update.ambiguity
         hoopSampled = update.sampled
+        if update.hoopMoved { hoopMoves += 1 }
         ball = update.ball
         for ev in update.events {
             attempts += 1
@@ -213,19 +216,31 @@ final class LiveModel: ObservableObject {
 
 struct LiveView: View {
     @StateObject private var model = LiveModel()
+    /// Boxes, hoop, tracked ball, speed readout and the parity check; off = just the camera, score and calls.
+    @AppStorage("showBoxes") private var showBoxes = true
 
     var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
             ZStack {
                 CameraPreview(camera: model.camera)
-                DetectionOverlay(detections: model.detections, hoop: model.hoop, ball: model.ball, frameSize: model.frameSize)
+                if showBoxes {
+                    DetectionOverlay(detections: model.detections, hoop: model.hoop, ball: model.ball, frameSize: model.frameSize)
+                }
             }
             .aspectRatio(model.frameSize.width / model.frameSize.height, contentMode: .fit)
 
             VStack {
                 HStack(alignment: .top) {
-                    hud
+                    if showBoxes {
+                        hud
+                    } else if model.hoop == nil {
+                        Text("Looking for the hoop… keep the rim in view")
+                            .font(.callout)
+                            .foregroundStyle(.white)
+                            .padding(8)
+                            .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 8))
+                    }
                     Spacer()
                     score
                 }
@@ -257,10 +272,10 @@ struct LiveView: View {
 
     private var hoopStatus: String {
         guard model.hoop != nil else {
-            return "hoop: finding \(model.hoopSampled)/\(ShotSession.findFrames) (keep the rim in view)"
+            return "hoop: finding \(model.hoopSampled)/\(ShotSession.window) (keep the rim in view)"
         }
         if let a = model.hoopAmbiguity, a > 0.5 { return "hoop: 2 hoops in view, check the green box" }
-        return "hoop: locked"
+        return model.hoopMoves == 0 ? "hoop: following the rim" : "hoop: following the rim (moved \(model.hoopMoves)×)"
     }
 
     private var hud: some View {
@@ -307,9 +322,13 @@ struct LiveView: View {
 
     private var controls: some View {
         HStack(spacing: 8) {
-            Button("Find hoop") { model.refindHoop() }.buttonStyle(.bordered).tint(.white)
+            Button { showBoxes.toggle() } label: {
+                Label("Boxes", systemImage: showBoxes ? "eye" : "eye.slash")
+            }
+            .buttonStyle(.bordered)
+            .tint(.white)
             Button("Reset") { model.resetShots() }.buttonStyle(.bordered).tint(.white)
-            if model.hasParityFrames {
+            if showBoxes && model.hasParityFrames {
                 Button("Check") { model.runParity() }
                     .buttonStyle(.borderedProminent)
                     .tint(.indigo)

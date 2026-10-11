@@ -154,6 +154,18 @@ private func snake(_ s: String) -> String {
     return out
 }
 
+@Suite struct MoveHoopTests {
+    @Test func onlyBetweenShots() {
+        let hoop = Box(900, 300, 960, 360), moved = Box(905, 302, 965, 362)
+        let pipe = ShotPipeline(hoop: hoop)
+        #expect(pipe.moveHoop(to: moved) && pipe.hoop == moved)
+        // A confident ball well above the rim, next to the hoop: the shot judge arms (a shot is in the air).
+        _ = pipe.step(0, [Detection(classIndex: 0, label: "ball", conf: 0.9, box: Box(920, 150, 940, 170))])
+        #expect(!pipe.shots.isIdle)
+        #expect(!pipe.moveHoop(to: hoop) && pipe.hoop == moved)
+    }
+}
+
 @Suite struct PyFormatTests {
     @Test func formatsLikePython() {
         #expect(pyFixed(0.125, 2) == "0.12")  // f"{0.125:.2f}": an exact tie, rounded to even
