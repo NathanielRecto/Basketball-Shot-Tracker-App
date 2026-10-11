@@ -84,7 +84,6 @@ The phone compiles the model once on first launch (no Mac to compile it at build
 
 ## Limits
 
-- Free Apple ID signing: the app stops opening after 7 days; reinstall with `xtool dev run -c release`.
 - Tripod use is what the research measured. Following the rim helps a hand-held phone but lags it by ~1.5 s
   and has not been evaluated offline (every research result uses one fixed hoop per video).
 - At ~20-28 fps, dev accuracy is 90-94% against 94.7% at 60 fps; the first gym (low camera, close to the hoop)
